@@ -241,8 +241,14 @@ function create (stubs, proxy, callbackURL) {
             return match.stub.addResponse(newResponse);
         }
         else {
-            return stubs.add({ predicates: newPredicates, responses: [newResponse] });
+            return initStub(newPredicates, newResponse);
         }
+    }
+
+    async function initStub(newPredicates, newResponse) {
+        let stub = await stubs.add({ predicates: newPredicates, responses: []});
+
+        return stub.addResponse(newResponse);
     }
 
     async function recordProxyResponse (responseConfig, request, response, logger) {

@@ -1,5 +1,6 @@
 'use strict';
 
+const { default: stringify } = require('safe-stable-stringify');
 const helpers = require('../util/helpers.js'),
     errors = require('../util/errors.js');
 
@@ -35,8 +36,9 @@ function createResponse (responseConfig, stubIndexFn) {
 }
 
 function wrap (stub = {}) {
-    const cloned = helpers.clone(stub),
-        statefulResponses = repeatTransform(cloned.responses || []);
+    const cloned = helpers.clone(stub);
+    cloned.responseOrder = cloned.responseOrder || [];
+    cloned.nextResponseIndex = cloned.nextResponseIndex || 0;
 
     /**
      * Adds a new response to the stub (e.g. during proxying)
@@ -44,10 +46,43 @@ function wrap (stub = {}) {
      * @param {Object} response - the response to add
      * @returns {Object} - the promise
      */
+
+    cloned.resetNextIndex = (index = 0) => {
+        if(index < 0) {
+            index = 0;
+        } else if(index >= cloned.responseOrder.length) {
+            index = cloned.responseOrder.length - 1;
+        }
+
+        cloned.nextResponseIndex = index;
+    }
+
+    const findResponse = (response) => {
+        const stringifiedResponse = stringify(response);
+
+        for (var index = 0; index < cloned.responses.length; index++) {
+            const storedResponse = stringify(cloned.responses[index]);
+
+            if(storedResponse === stringifiedResponse) {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
     cloned.addResponse = async response => {
         cloned.responses = cloned.responses || [];
-        cloned.responses.push(response);
-        statefulResponses.push(response);
+
+        let index = findResponse(response);
+
+        if(index === -1) {
+            cloned.responses.push(response);
+            index = cloned.responses.length - 1;
+        }
+        
+        cloned.responseOrder.push(index);
+
         return response;
     };
 
@@ -58,15 +93,19 @@ function wrap (stub = {}) {
      * @returns {Object} - the promise
      */
     cloned.nextResponse = async () => {
-        const responseConfig = statefulResponses.shift();
-
-        if (responseConfig) {
-            statefulResponses.push(responseConfig);
-            return createResponse(responseConfig, cloned.stubIndex);
-        }
-        else {
+        if(cloned.responseOrder.length <= 0) {
             return createResponse();
         }
+
+        let response = cloned.responses[cloned.responseOrder[cloned.nextResponseIndex]];
+
+        cloned.nextResponseIndex += 1;
+
+        if(cloned.nextResponseIndex >= cloned.responseOrder.length) {
+            cloned.nextResponseIndex = 0;
+        }
+
+        return createResponse(response, cloned.stubIndex);
     };
 
     /**
@@ -89,6 +128,13 @@ function wrap (stub = {}) {
         });
     };
 
+    const responses = cloned.responses || [];
+    cloned.responses = [];
+
+    responses.forEach(async response => {
+        await cloned.addResponse(response);
+    });
+
     return cloned;
 }
 
@@ -98,7 +144,24 @@ function wrap (stub = {}) {
  */
 function createStubsRepository () {
     const stubs = [];
+    const responses = [];
     let requests = [];
+
+    const addGlobalResponse = function (response) {
+        responses.push(response);
+    }
+
+    const lookupGlobalResponse = function (index) {
+        if(typeof index !== 'Number' || index < 0 || index >= responses.length) {
+            return {};
+        }
+
+        return responses[index];
+    }
+
+    const getGlobalResponseCount = function() {
+        return responses.length;
+    }
 
     function reindex () {
         // stubIndex() is used to find the right spot to insert recorded
@@ -131,8 +194,17 @@ function createStubsRepository () {
      * @returns {Object} - the promise
      */
     async function add (stub) {
-        stubs.push(wrap(stub));
+        let wrappedStub = wrap(stub);
+
+        wrappedStub.lookupGlobalResponse = lookupGlobalResponse;
+        wrappedStub.addGlobalResponse = addGlobalResponse;
+        wrappedStub.getGlobalResponseCount = getGlobalResponseCount;
+
+
+        stubs.push(wrappedStub);
         reindex();
+
+        return wrappedStub;
     }
 
     /**
@@ -191,6 +263,14 @@ function createStubsRepository () {
 
         stubs.splice(index, 1);
         reindex();
+    }
+
+    async function resetResponseAtIndex(index, responseIndex) {
+        if (typeof stubs[index] === 'undefined') {
+            throw errors.MissingResourceError(`no stub at index ${index}`);
+        }
+
+        stubs[index].resetNextIndex(responseIndex);
     }
 
     /**
@@ -273,7 +353,8 @@ function createStubsRepository () {
         deleteSavedProxyResponses,
         addRequest,
         loadRequests,
-        deleteSavedRequests
+        deleteSavedRequests,
+        resetResponseAtIndex
     };
 }
 
