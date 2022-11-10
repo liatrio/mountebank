@@ -3,6 +3,7 @@
 const { default: stringify } = require('safe-stable-stringify');
 const helpers = require('../util/helpers.js'),
     errors = require('../util/errors.js');
+const {v4: uuid} = require('uuid');
 
 /**
  * An abstraction for loading imposters from in-memory
@@ -47,6 +48,10 @@ function wrap (stub = {}) {
      * @returns {Object} - the promise
      */
 
+    cloned.getResponses = () => {
+        return cloned.getAssociatedGlobalResponses(cloned);
+    }
+
     cloned.resetNextIndex = (index = 0) => {
         if(index < 0) {
             index = 0;
@@ -57,33 +62,10 @@ function wrap (stub = {}) {
         cloned.nextResponseIndex = index;
     }
 
-    const findResponse = (response) => {
-        const stringifiedResponse = stringify(response);
-
-        for (var index = 0; index < cloned.responses.length; index++) {
-            const storedResponse = stringify(cloned.responses[index]);
-
-            if(storedResponse === stringifiedResponse) {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
     cloned.addResponse = async response => {
-        cloned.responses = cloned.responses || [];
+        const id = cloned.addGlobalResponse(response, cloned);
 
-        let index = findResponse(response);
-
-        if(index === -1) {
-            cloned.responses.push(response);
-            index = cloned.responses.length - 1;
-        }
-        
-        cloned.responseOrder.push(index);
-
-        return response;
+        cloned.responseOrder.push(id);
     };
 
     /**
@@ -97,7 +79,11 @@ function wrap (stub = {}) {
             return createResponse();
         }
 
-        let response = cloned.responses[cloned.responseOrder[cloned.nextResponseIndex]];
+        const response = cloned.lookupGlobalResponse(cloned.responseOrder[cloned.nextResponseIndex]);
+
+        if(response === {}) {
+            return createResponse();
+        }
 
         cloned.nextResponseIndex += 1;
 
@@ -128,13 +114,6 @@ function wrap (stub = {}) {
         });
     };
 
-    const responses = cloned.responses || [];
-    cloned.responses = [];
-
-    responses.forEach(async response => {
-        await cloned.addResponse(response);
-    });
-
     return cloned;
 }
 
@@ -142,25 +121,62 @@ function wrap (stub = {}) {
  * Creates the stubs repository for a single imposter
  * @returns {Object}
  */
-function createStubsRepository () {
+function createStubsRepository (_responses, _responseLinks, _stubLinks) {
     const stubs = [];
-    const responses = [];
+    let responses = _responses || {};
     let requests = [];
+    let responseLinks = _responseLinks || {};
+    let stubLinks = _stubLinks || {};
 
-    const addGlobalResponse = function (response) {
-        responses.push(response);
-    }
-
-    const lookupGlobalResponse = function (index) {
-        if(typeof index !== 'Number' || index < 0 || index >= responses.length) {
-            return {};
+    const getAssociatedGlobalResponses = function(id) {
+        let associatedResponses = [];
+        
+        for(var link in stubLinks[id]) {
+            associatedResponses.push(responses[stubLinks[id][link]]);
         }
 
-        return responses[index];
+        return associatedResponses;
     }
 
-    const getGlobalResponseCount = function() {
-        return responses.length;
+    const findResponse = (response) => {
+        const stringifiedResponse = stringify(response);
+
+        for(var id in responses) {
+            const storedResponse = stringify(responses[id]);
+
+            if(stringifiedResponse === storedResponse) {
+                return id;
+            }
+        }
+
+        return "";
+    }
+
+    const addGlobalResponse = function (response, stub) {
+        let id = findResponse(response);
+
+        if(id === "") {
+            let newId = uuid();
+            responses[newId] = response;
+            id = newId;
+        }
+        
+        stubLinks[stub.id] = stubLinks[stub.id] || [];
+        responseLinks[id] = responseLinks[id] || [];
+
+        if(!stubLinks[stub.id].includes(id)) {
+            stubLinks[stub.id].push(id);
+        }
+
+        if(!responseLinks[id].includes(stub.id)) {
+            responseLinks[id].push(stub.id);
+        }
+
+        return id;
+    }
+
+    const lookupGlobalResponse = function (id) {
+        return responses[id];
     }
 
     function reindex () {
@@ -198,10 +214,10 @@ function createStubsRepository () {
 
         wrappedStub.lookupGlobalResponse = lookupGlobalResponse;
         wrappedStub.addGlobalResponse = addGlobalResponse;
-        wrappedStub.getGlobalResponseCount = getGlobalResponseCount;
-
+        wrappedStub.getAssociatedGlobalResponses = getAssociatedGlobalResponses;
 
         stubs.push(wrappedStub);
+
         reindex();
 
         return wrappedStub;
@@ -261,7 +277,18 @@ function createStubsRepository () {
             throw errors.MissingResourceError(`no stub at index ${index}`);
         }
 
-        stubs.splice(index, 1);
+        const stub = stubs.splice(index, 1)[0];
+
+        stubLinks[stub.id].forEach(responseId => {
+            if(responseLinks[responseId].length === 1) {
+                delete responseLinks[responseId];
+                delete responses[responseId];
+            } else {
+                responseLinks[responseId].splice(resposneLinks[responseId].indexOf(stub.id)); 
+            }
+        });
+
+        delete stubLinks[stub.id];
         reindex();
     }
 
@@ -284,6 +311,8 @@ function createStubsRepository () {
         const cloned = helpers.clone(stubs);
 
         cloned.forEach(stub => {
+            delete stub.id;
+
             if (!options.debug) {
                 delete stub.matches;
             }
@@ -342,6 +371,9 @@ function createStubsRepository () {
     }
 
     return {
+        responses: responses,
+        responseLinks: responseLinks,
+        stubLinks: stubLinks,
         count: () => stubs.length,
         first,
         add,
@@ -463,10 +495,10 @@ function create () {
      * @param {Number} id - the imposter's id
      * @returns {Object} - the stub repository
      */
-    function stubsFor (id) {
+    function stubsFor (id, responses, responseLinks, stubLinks) {
         // In practice, the stubsFor call occurs before the imposter is actually added...
         if (!stubRepos[String(id)]) {
-            stubRepos[String(id)] = createStubsRepository();
+            stubRepos[String(id)] = createStubsRepository(responses, responseLinks, stubLinks);
         }
 
         return stubRepos[String(id)];
