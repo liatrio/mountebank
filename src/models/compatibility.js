@@ -19,21 +19,21 @@ function upcastStubs (request) {
 }
 
 function upcastResponsesToDictionary (request) {
-    request.responses = request.responses || {};
-    request.stubLinks = request.stubLinks || {};
-    request.responseLinks = request.responseLinks || {};
-
     (request.stubs || []).forEach(stub => {
         if(Array.isArray(stub.responses)) {            
+            let responses = {};
+            let stubLinks = {};
+            let responseLinks = {};
+
             for(let index = 0; index < stub.responses.length; index++) {
                 const id = uuid();
-                request.responses[id] = stub.responses[index];
+                responses[id] = stub.responses[index];
 
-                request.stubLinks[stub.id] = request.stubLinks[stub.id] || [];
-                request.stubLinks[stub.id].push(id);
+                stubLinks[stub.id] = stubLinks[stub.id] || [];
+                stubLinks[stub.id].push(id);
 
-                request.responseLinks[id] = request.responseLinks[id] || [];
-                request.responseLinks[id].push(stub.id);
+                responseLinks[id] = responseLinks[id] || [];
+                responseLinks[id].push(stub.id);
 
                 let repeats = stub.repeat || 1;
 
@@ -41,9 +41,11 @@ function upcastResponsesToDictionary (request) {
                     stub.responseOrder.push(id);
                 }
             }
-        }
 
-        delete stub.responses;
+            stub.responses = responses;
+            stub.stubLinks = stubLinks;
+            stub.responseLinks = responseLinks;
+        }
     })
 }
 

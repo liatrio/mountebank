@@ -40,6 +40,7 @@ function wrap (stub = {}, repo) {
     const cloned = helpers.clone(stub);
     cloned.responseOrder = cloned.responseOrder || [];
     cloned.nextResponseIndex = cloned.nextResponseIndex || 0;
+    cloned.id = cloned.id || uuid();
 
     /**
      * Adds a new response to the stub (e.g. during proxying)
@@ -204,6 +205,20 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
         return { success: false, stub: wrap({}, responseHelper) };
     }
 
+    async function addResponses (set) {
+        for(var id in set.responses || {}) {
+            responses[id] = set.responses[id];
+        }
+
+        for(var id in set.stubLinks || {}) {
+            stubLinks[id] = set.stubLinks[id];
+        }
+
+        for(var id in set.responseLinks || {}) {
+            responseLinks[id] = set.responseLinks[id];
+        }
+    }
+
     /**
      * Adds a new stub
      * @memberOf module:models/inMemoryImpostersRepository#
@@ -211,6 +226,12 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
      * @returns {Object} - the promise
      */
     async function add (stub) {
+        await addResponses(stub);
+
+        delete stub.responses;
+        delete stub.responseLinks;
+        delete stub.stubLinks;
+
         let wrappedStub = wrap(stub, responseHelper);
 
         stubs.push(wrappedStub);
@@ -228,6 +249,12 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
      * @returns {Object} - the promise
      */
     async function insertAtIndex (stub, index) {
+        await addResponses(stub);
+
+        delete stub.responses;
+        delete stub.responseLinks;
+        delete stub.stubLinks;
+
         let wrappedStub = wrap(stub, responseHelper);
 
         stubs.splice(index, 0, wrappedStub);
@@ -385,7 +412,8 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
         addRequest,
         loadRequests,
         deleteSavedRequests,
-        resetResponseAtIndex
+        resetResponseAtIndex,
+        addResponses
     };
 }
 

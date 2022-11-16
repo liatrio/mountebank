@@ -276,8 +276,10 @@ function create (protocols, imposters, logger, allowInjection) {
             const result = await validateStubs(imposter, [newStub]);
             if (result.isValid) {
                 await stubs.insertAtIndex(newStub, index);
-                const json = await imposter.toJSON();
-                response.send(json);
+                //const json = await imposter.toJSON();
+                let stubResponse = helpers.clone(newStub);
+                stubResponse.index = index;
+                response.send(stubResponse);
             }
             else {
                 respondWithValidationErrors(response, result.errors);
