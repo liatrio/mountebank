@@ -36,7 +36,7 @@ function createResponse (responseConfig, stubIndexFn) {
     return cloned;
 }
 
-function wrap (stub = {}) {
+function wrap (stub = {}, repo) {
     const cloned = helpers.clone(stub);
     cloned.responseOrder = cloned.responseOrder || [];
     cloned.nextResponseIndex = cloned.nextResponseIndex || 0;
@@ -49,7 +49,7 @@ function wrap (stub = {}) {
      */
 
     cloned.getResponses = () => {
-        return cloned.getAssociatedGlobalResponses(cloned);
+        return repo.getAssociatedGlobalResponses(cloned);
     }
 
     cloned.resetNextIndex = (index = 0) => {
@@ -63,7 +63,7 @@ function wrap (stub = {}) {
     }
 
     cloned.addResponse = async response => {
-        const id = cloned.addGlobalResponse(response, cloned);
+        const id = repo.addGlobalResponse(response, cloned);
 
         cloned.responseOrder.push(id);
     };
@@ -79,7 +79,7 @@ function wrap (stub = {}) {
             return createResponse();
         }
 
-        const response = cloned.lookupGlobalResponse(cloned.responseOrder[cloned.nextResponseIndex]);
+        const response = repo.lookupGlobalResponse(cloned.responseOrder[cloned.nextResponseIndex]);
 
         if(response === {}) {
             return createResponse();
@@ -128,16 +128,6 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
     let responseLinks = _responseLinks || {};
     let stubLinks = _stubLinks || {};
 
-    const getAssociatedGlobalResponses = function(id) {
-        let associatedResponses = [];
-        
-        for(var link in stubLinks[id]) {
-            associatedResponses.push(responses[stubLinks[id][link]]);
-        }
-
-        return associatedResponses;
-    }
-
     const findResponse = (response) => {
         const stringifiedResponse = stringify(response);
 
@@ -151,32 +141,43 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
 
         return "";
     }
+    
 
-    const addGlobalResponse = function (response, stub) {
-        let id = findResponse(response);
-
-        if(id === "") {
-            let newId = uuid();
-            responses[newId] = response;
-            id = newId;
+    const responseHelper = {
+        getAssociatedGlobalResponses : function(id) {
+            let associatedResponses = [];
+            
+            for(var link in stubLinks[id]) {
+                associatedResponses.push(responses[stubLinks[id][link]]);
+            }
+    
+            return associatedResponses;
+        },
+        addGlobalResponse : function (response, stub) {
+            let id = findResponse(response);
+    
+            if(id === "") {
+                let newId = uuid();
+                responses[newId] = response;
+                id = newId;
+            }
+            
+            stubLinks[stub.id] = stubLinks[stub.id] || [];
+            responseLinks[id] = responseLinks[id] || [];
+    
+            if(!stubLinks[stub.id].includes(id)) {
+                stubLinks[stub.id].push(id);
+            }
+    
+            if(!responseLinks[id].includes(stub.id)) {
+                responseLinks[id].push(stub.id);
+            }
+    
+            return id;
+        },
+        lookupGlobalResponse : function (id) {
+            return responses[id];
         }
-        
-        stubLinks[stub.id] = stubLinks[stub.id] || [];
-        responseLinks[id] = responseLinks[id] || [];
-
-        if(!stubLinks[stub.id].includes(id)) {
-            stubLinks[stub.id].push(id);
-        }
-
-        if(!responseLinks[id].includes(stub.id)) {
-            responseLinks[id].push(stub.id);
-        }
-
-        return id;
-    }
-
-    const lookupGlobalResponse = function (id) {
-        return responses[id];
     }
 
     function reindex () {
@@ -200,7 +201,7 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
                 return { success: true, stub: stubs[i] };
             }
         }
-        return { success: false, stub: wrap() };
+        return { success: false, stub: wrap({}, responseHelper) };
     }
 
     /**
@@ -210,11 +211,7 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
      * @returns {Object} - the promise
      */
     async function add (stub) {
-        let wrappedStub = wrap(stub);
-
-        wrappedStub.lookupGlobalResponse = lookupGlobalResponse;
-        wrappedStub.addGlobalResponse = addGlobalResponse;
-        wrappedStub.getAssociatedGlobalResponses = getAssociatedGlobalResponses;
+        let wrappedStub = wrap(stub, responseHelper);
 
         stubs.push(wrappedStub);
 
@@ -231,7 +228,9 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
      * @returns {Object} - the promise
      */
     async function insertAtIndex (stub, index) {
-        stubs.splice(index, 0, wrap(stub));
+        let wrappedStub = wrap(stub, responseHelper);
+
+        stubs.splice(index, 0, wrappedStub);
         reindex();
     }
 
@@ -262,7 +261,7 @@ function createStubsRepository (_responses, _responseLinks, _stubLinks) {
             throw errors.MissingResourceError(`no stub at index ${index}`);
         }
 
-        stubs[index] = wrap(newStub);
+        stubs[index] = wrap(newStub, responseHelper);
         reindex();
     }
 

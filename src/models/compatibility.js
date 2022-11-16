@@ -1,6 +1,7 @@
 'use strict';
 
 const helpers = require('../util/helpers');
+const {v4: uuid} = require('uuid');
 
 /**
  * mountebank aims to evolve without requiring users to have to worry about versioning,
@@ -9,6 +10,42 @@ const helpers = require('../util/helpers');
  * new format, but users who still use the old format don't need to migrate.
  * @module
  */
+function upcastStubs (request) {
+    (request.stubs || []).forEach(stub => {
+        stub.id = stub.id || uuid();
+        stub.responseOrder = stub.responseOrder || [];
+        stub.nextResponseIndex = stub.nextResponseIndex || 0;
+    })
+}
+
+function upcastResponsesToDictionary (request) {
+    request.responses = request.responses || {};
+    request.stubLinks = request.stubLinks || {};
+    request.responseLinks = request.responseLinks || {};
+
+    (request.stubs || []).forEach(stub => {
+        if(Array.isArray(stub.responses)) {            
+            for(let index = 0; index < stub.responses.length; index++) {
+                const id = uuid();
+                request.responses[id] = stub.responses[index];
+
+                request.stubLinks[stub.id] = request.stubLinks[stub.id] || [];
+                request.stubLinks[stub.id].push(id);
+
+                request.responseLinks[id] = request.responseLinks[id] || [];
+                request.responseLinks[id].push(stub.id);
+
+                let repeats = stub.repeat || 1;
+
+                for(repeats; repeats > 0; repeats--) {
+                    stub.responseOrder.push(id);
+                }
+            }
+        }
+
+        delete stub.responses;
+    })
+}
 
 /**
  * The original shellTransform only accepted one command
@@ -16,14 +53,13 @@ const helpers = require('../util/helpers');
  * @param {Object} request - the request to upcast
  */
 function upcastShellTransformToArray (request) {
-    (request.stubs || []).forEach(stub => {
-        (stub.responses || []).forEach(response => {
-            if (response._behaviors && response._behaviors.shellTransform &&
-                typeof response._behaviors.shellTransform === 'string') {
-                response._behaviors.shellTransform = [response._behaviors.shellTransform];
-            }
-        });
-    });
+    for(var id in request.responses) {
+        const response = request.responses[id];
+        if (response._behaviors && response._behaviors.shellTransform &&
+            typeof response._behaviors.shellTransform === 'string') {
+            response._behaviors.shellTransform = [response._behaviors.shellTransform];
+        }
+    }
 }
 
 function canUpcastBehaviors (response) {
@@ -72,11 +108,13 @@ function upcastResponseBehaviors (response) {
  * @param {Object} request - the request to upcast
  */
 function upcastBehaviorsToArray (request) {
-    (request.stubs || []).forEach(stub => {
-        (stub.responses || [])
-            .filter(canUpcastBehaviors)
-            .forEach(upcastResponseBehaviors);
-    });
+    for(var id in request.responses) {
+        const response = request.responses[id];
+        
+        if(canUpcastBehaviors(response)) {
+            upcastResponseBehaviors(response);
+        }
+    }
 }
 
 /**
@@ -106,6 +144,8 @@ function upcastTcpProxyDestinationToUrl (request) {
  * @param {Object} request - the request to upcast
  */
 function upcast (request) {
+    upcastStubs(request);
+    upcastResponsesToDictionary(request);
     upcastShellTransformToArray(request);
     upcastTcpProxyDestinationToUrl(request);
     upcastBehaviorsToArray(request);
