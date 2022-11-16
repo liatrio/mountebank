@@ -127,9 +127,9 @@ module.exports = function (createBaseServer) {
                 const simplifiedRequest = await httpRequest.createFrom(request);
                 logger.debug('%s => %s', clientName, JSON.stringify(simplifiedRequest));
 
-                const mbResponse = await responseFn(simplifiedRequest, { rawUrl: request.url }),
-                    stubResponse = postProcess(mbResponse, simplifiedRequest),
-                    encoding = stubResponse._mode === 'binary' ? 'base64' : 'utf8';
+                const mbResponse = await responseFn(simplifiedRequest, { rawUrl: request.url });
+                const stubResponse = postProcess(helpers.clone(mbResponse), simplifiedRequest);
+                const encoding = stubResponse._mode === 'binary' ? 'base64' : 'utf8';
 
                 if (mbResponse.blocked) {
                     request.socket.destroy();

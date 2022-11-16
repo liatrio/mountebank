@@ -41,17 +41,20 @@ function create (header, server, loadRequests) {
         }
 
         imposter.stubs = await server.stubs.toJSON(newOptions);
+        imposter.responses = helpers.clone(server.stubs.responses);
+        imposter.responseLinks = helpers.clone(server.stubs.responseLinks);
+        imposter.stubLinks = helpers.clone(server.stubs.stubLinks);
         return imposter;
     }
 
     function removeNonEssentialInformationFrom (imposter) {
-        imposter.stubs.forEach(stub => {
-            stub.responses.forEach(response => {
-                if (helpers.defined(response.is)) {
-                    delete response.is._proxyResponseTime;
-                }
-            });
-        });
+        for(var id in imposter.responses) {
+            let response = imposter.responses[id];
+
+            if (helpers.defined(response.is)) {
+                delete response.is._proxyResponseTime;
+            }
+        }
     }
 
     async function addRequestsTo (imposter) {
@@ -59,12 +62,35 @@ function create (header, server, loadRequests) {
         return imposter;
     }
 
-    function removeProxiesFrom (imposter) {
-        imposter.stubs.forEach(stub => {
-            // eslint-disable-next-line no-prototype-builtins
-            stub.responses = stub.responses.filter(response => !response.hasOwnProperty('proxy'));
+    function removeProxiesFrom (imposter) {        
+        for(var id in imposter.responses) {
+            let response = imposter.responses[id];
+
+            if(response.hasOwnProperty('proxy')) {
+                delete imposter.responses[id];
+            }
+        }
+
+        imposter.stubs = imposter.stubs.filter(stub => {
+            let nextId = "";
+            let responseOrder = [];
+
+            while(stub.responseOrder.length > 0) {
+                nextId = stub.responseOrder.shift();
+
+                if(imposter.responses.hasOwnProperty(nextId)) {
+                    responseOrder.push(nextId);
+                }
+            }
+
+            if(responseOrder.length === 0) {
+                return false;
+            }
+
+            stub.responseOrder = responseOrder;
+            
+            return true;
         });
-        imposter.stubs = imposter.stubs.filter(stub => stub.responses.length > 0);
     }
 
     function addLinksTo (imposter) {

@@ -131,20 +131,27 @@ function create (options) {
         });
     }
 
-    function hasStubInjection (stub) {
-        const hasResponseInjections = stub.responses.some(response => {
-                const hasDecorator = hasBehavior(response, 'decorate'),
-                    hasWaitFunction = hasBehavior(response, 'wait', value => typeof value === 'string');
+    function hasResponseInjection(imposter) {
+        const hasResponseInjections = imposter.responses.some(response => {
+            const hasDecorator = hasBehavior(response, 'decorate'),
+                hasWaitFunction = hasBehavior(response, 'wait', value => typeof value === 'string');
 
-                return response.inject || hasDecorator || hasWaitFunction || hasPredicateGeneratorInjection(response);
-            }),
-            hasPredicateInjections = Object.keys(stub.predicates || {}).some(predicate => stub.predicates[predicate].inject),
-            hasAddDecorateBehaviorInProxy = stub.responses.some(response => response.proxy && response.proxy.addDecorateBehavior);
-        return hasResponseInjections || hasPredicateInjections || hasAddDecorateBehaviorInProxy;
+            return response.inject || hasDecorator || hasWaitFunction || hasPredicateGeneratorInjection(response);
+        });
+
+        const  hasAddDecorateBehaviorInProxy = stub.responses.some(response => response.proxy && response.proxy.addDecorateBehavior);
+
+        return hasResponseInjections || hasAddDecorateBehaviorInProxy;
     }
 
-    function hasShellExecution (stub) {
-        return stub.responses.some(response => hasBehavior(response, 'shellTransform'));
+    function hasStubInjection (stub) {
+        const hasPredicateInjections = Object.keys(stub.predicates || {}).some(predicate => stub.predicates[predicate].inject);
+           
+        return hasPredicateInjections;
+    }
+
+    function hasShellExecution (imposter) {
+        return imposter.responses.some(response => hasBehavior(response, 'shellTransform'));
     }
 
     function addStubInjectionErrors (stub, errors) {
@@ -155,10 +162,6 @@ function create (options) {
         if (hasStubInjection(stub)) {
             errors.push(exceptions.InjectionError(
                 'JavaScript injection is not allowed unless mb is run with the --allowInjection flag', { source: stub }));
-        }
-        if (hasShellExecution(stub)) {
-            errors.push(exceptions.InjectionError(
-                'Shell execution is not allowed unless mb is run with the --allowInjection flag', { source: stub }));
         }
     }
 
@@ -183,30 +186,28 @@ function create (options) {
         }
     }
 
-    function addBehaviorErrors (stub, errors) {
-        stub.responses.forEach(response => {
+    function addBehaviorErrors (imposter, errors) {
+        imposter.responses.forEach(response => {
             addAllTo(errors, behaviors.validate(response.behaviors));
             addRepeatErrorsTo(errors, response);
         });
     }
 
-    async function errorsForStub (stub, encoding, logger) {
+    async function errorsForStub (stub, responses, encoding, logger) {
         const errors = [];
 
-        if (!Array.isArray(stub.responses) || stub.responses.length === 0) {
-            errors.push(exceptions.ValidationError("'responses' must be a non-empty array", {
+        if (!Array.isArray(stub.responseOrder) || stub.responseOrder.length === 0) {
+            errors.push(exceptions.ValidationError("'responseOrder' must be a non-empty array", {
+                source: stub
+            }));
+        }
+        else if (stub.nextResponseIndex === undefined) {
+            errors.push(exceptions.ValidationError("'nextResponseIndex' must be an integer", {
                 source: stub
             }));
         }
         else {
             addStubInjectionErrors(stub, errors);
-            addBehaviorErrors(stub, errors);
-        }
-
-        if (errors.length === 0) {
-            // no sense in dry-running if there are already problems;
-            // it will just add noise to the errors
-            await addDryRunErrors(stub, encoding, errors, logger);
         }
 
         return errors;
@@ -224,6 +225,28 @@ function create (options) {
         return errors;
     }
 
+    function errorsForResponse (request) {
+        const errors = [];
+
+        if (options.allowInjection) {
+            return errors;
+        }
+
+        if (hasResponseInjection(request)) {
+            errors.push(exceptions.InjectionError(
+                'JavaScript injection is not allowed unless mb is run with the --allowInjection flag', { source: stub }));
+        }
+        
+        if (hasShellExecution(request)) {
+            errors.push(exceptions.InjectionError(
+                'Shell execution is not allowed unless mb is run with the --allowInjection flag', { source: stub }));
+        }
+        
+        addBehaviorErrors(request, errors);
+
+        return errors;
+    }
+
     /**
      * Validates that the imposter creation is syntactically valid
      * @memberOf module:models/dryRunValidator#
@@ -234,9 +257,11 @@ function create (options) {
     async function validate (request, logger) {
         const stubs = request.stubs || [],
             encoding = request.mode === 'binary' ? 'base64' : 'utf8',
-            validations = stubs.map(stub => errorsForStub(stub, encoding, logger));
+            validations = stubs.map(stub => errorsForStub(stub, request.responses, encoding, logger));
 
         validations.push(Promise.resolve(errorsForRequest(request)));
+        validations.push(Promise.resolve(errorsForResponse(request)));
+
         if (typeof options.additionalValidation === 'function') {
             validations.push(Promise.resolve(options.additionalValidation(request)));
         }

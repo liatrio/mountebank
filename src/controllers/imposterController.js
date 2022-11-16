@@ -276,8 +276,10 @@ function create (protocols, imposters, logger, allowInjection) {
             const result = await validateStubs(imposter, [newStub]);
             if (result.isValid) {
                 await stubs.insertAtIndex(newStub, index);
-                const json = await imposter.toJSON();
-                response.send(json);
+                //const json = await imposter.toJSON();
+                let stubResponse = helpers.clone(newStub);
+                stubResponse.index = index;
+                response.send(stubResponse);
             }
             else {
                 respondWithValidationErrors(response, result.errors);
@@ -311,11 +313,36 @@ function create (protocols, imposters, logger, allowInjection) {
         }
     }
 
+
+    /**
+     * Corresponds to POST /imposters/:port/stubs/:stubIndex/resetNextResponse/:nextResponse
+     * Resets the next response for a stub
+     * @memberOf module:controllers/imposterController#
+     * @param {Object} request - the HTTP request
+     * @param {Object} response - the HTTP response
+     * @returns {Object} A promise for testing
+     */
+    async function resetStubNextResponse(request, response) {
+        const imposter = await imposters.get(request.params.id);
+        const stubs = imposters.stubsFor(request.params.id);
+        const validation = await validateStubIndex(stubs, request.params.stubIndex);
+
+        if (validation.isValid) {
+            await stubs.resetResponseAtIndex(request.params.stubIndex, Number(request.params.nextResponse));
+            const json = await imposter.toJSON();
+            response.send(json);
+        }
+        else {
+            respondWithValidationErrors(response, validation.errors, 404);
+        }
+    }
+
     return {
         get,
         del,
         resetProxies,
         resetRequests,
+        resetStubNextResponse,
         postRequest,
         postProxyResponse,
         putStubs,

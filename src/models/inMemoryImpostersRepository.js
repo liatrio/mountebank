@@ -1,7 +1,9 @@
 'use strict';
 
+const { default: stringify } = require('safe-stable-stringify');
 const helpers = require('../util/helpers.js'),
     errors = require('../util/errors.js');
+const {v4: uuid} = require('uuid');
 
 /**
  * An abstraction for loading imposters from in-memory
@@ -34,9 +36,11 @@ function createResponse (responseConfig, stubIndexFn) {
     return cloned;
 }
 
-function wrap (stub = {}) {
-    const cloned = helpers.clone(stub),
-        statefulResponses = repeatTransform(cloned.responses || []);
+function wrap (stub = {}, repo) {
+    const cloned = helpers.clone(stub);
+    cloned.responseOrder = cloned.responseOrder || [];
+    cloned.nextResponseIndex = cloned.nextResponseIndex || 0;
+    cloned.id = cloned.id || uuid();
 
     /**
      * Adds a new response to the stub (e.g. during proxying)
@@ -44,11 +48,25 @@ function wrap (stub = {}) {
      * @param {Object} response - the response to add
      * @returns {Object} - the promise
      */
+
+    cloned.getResponses = () => {
+        return repo.getAssociatedGlobalResponses(cloned);
+    }
+
+    cloned.resetNextIndex = (index = 0) => {
+        if(index < 0) {
+            index = 0;
+        } else if(index >= cloned.responseOrder.length) {
+            index = cloned.responseOrder.length - 1;
+        }
+
+        cloned.nextResponseIndex = index;
+    }
+
     cloned.addResponse = async response => {
-        cloned.responses = cloned.responses || [];
-        cloned.responses.push(response);
-        statefulResponses.push(response);
-        return response;
+        const id = repo.addGlobalResponse(response, cloned);
+
+        cloned.responseOrder.push(id);
     };
 
     /**
@@ -58,15 +76,23 @@ function wrap (stub = {}) {
      * @returns {Object} - the promise
      */
     cloned.nextResponse = async () => {
-        const responseConfig = statefulResponses.shift();
-
-        if (responseConfig) {
-            statefulResponses.push(responseConfig);
-            return createResponse(responseConfig, cloned.stubIndex);
-        }
-        else {
+        if(cloned.responseOrder.length <= 0) {
             return createResponse();
         }
+
+        const response = repo.lookupGlobalResponse(cloned.responseOrder[cloned.nextResponseIndex]);
+
+        if(response === {}) {
+            return createResponse();
+        }
+
+        cloned.nextResponseIndex += 1;
+
+        if(cloned.nextResponseIndex >= cloned.responseOrder.length) {
+            cloned.nextResponseIndex = 0;
+        }
+
+        return createResponse(response, cloned.stubIndex);
     };
 
     /**
@@ -96,9 +122,64 @@ function wrap (stub = {}) {
  * Creates the stubs repository for a single imposter
  * @returns {Object}
  */
-function createStubsRepository () {
+function createStubsRepository (_responses, _responseLinks, _stubLinks) {
     const stubs = [];
+    let responses = _responses || {};
     let requests = [];
+    let responseLinks = _responseLinks || {};
+    let stubLinks = _stubLinks || {};
+
+    const findResponse = (response) => {
+        const stringifiedResponse = stringify(response);
+
+        for(var id in responses) {
+            const storedResponse = stringify(responses[id]);
+
+            if(stringifiedResponse === storedResponse) {
+                return id;
+            }
+        }
+
+        return "";
+    }
+    
+
+    const responseHelper = {
+        getAssociatedGlobalResponses : function(id) {
+            let associatedResponses = [];
+            
+            for(var link in stubLinks[id]) {
+                associatedResponses.push(responses[stubLinks[id][link]]);
+            }
+    
+            return associatedResponses;
+        },
+        addGlobalResponse : function (response, stub) {
+            let id = findResponse(response);
+    
+            if(id === "") {
+                let newId = uuid();
+                responses[newId] = response;
+                id = newId;
+            }
+            
+            stubLinks[stub.id] = stubLinks[stub.id] || [];
+            responseLinks[id] = responseLinks[id] || [];
+    
+            if(!stubLinks[stub.id].includes(id)) {
+                stubLinks[stub.id].push(id);
+            }
+    
+            if(!responseLinks[id].includes(stub.id)) {
+                responseLinks[id].push(stub.id);
+            }
+    
+            return id;
+        },
+        lookupGlobalResponse : function (id) {
+            return responses[id];
+        }
+    }
 
     function reindex () {
         // stubIndex() is used to find the right spot to insert recorded
@@ -121,7 +202,21 @@ function createStubsRepository () {
                 return { success: true, stub: stubs[i] };
             }
         }
-        return { success: false, stub: wrap() };
+        return { success: false, stub: wrap({}, responseHelper) };
+    }
+
+    async function addResponses (set) {
+        for(var id in set.responses || {}) {
+            responses[id] = set.responses[id];
+        }
+
+        for(var id in set.stubLinks || {}) {
+            stubLinks[id] = set.stubLinks[id];
+        }
+
+        for(var id in set.responseLinks || {}) {
+            responseLinks[id] = set.responseLinks[id];
+        }
     }
 
     /**
@@ -131,8 +226,19 @@ function createStubsRepository () {
      * @returns {Object} - the promise
      */
     async function add (stub) {
-        stubs.push(wrap(stub));
+        await addResponses(stub);
+
+        delete stub.responses;
+        delete stub.responseLinks;
+        delete stub.stubLinks;
+
+        let wrappedStub = wrap(stub, responseHelper);
+
+        stubs.push(wrappedStub);
+
         reindex();
+
+        return wrappedStub;
     }
 
     /**
@@ -143,7 +249,15 @@ function createStubsRepository () {
      * @returns {Object} - the promise
      */
     async function insertAtIndex (stub, index) {
-        stubs.splice(index, 0, wrap(stub));
+        await addResponses(stub);
+
+        delete stub.responses;
+        delete stub.responseLinks;
+        delete stub.stubLinks;
+
+        let wrappedStub = wrap(stub, responseHelper);
+
+        stubs.splice(index, 0, wrappedStub);
         reindex();
     }
 
@@ -174,7 +288,7 @@ function createStubsRepository () {
             throw errors.MissingResourceError(`no stub at index ${index}`);
         }
 
-        stubs[index] = wrap(newStub);
+        stubs[index] = wrap(newStub, responseHelper);
         reindex();
     }
 
@@ -189,8 +303,27 @@ function createStubsRepository () {
             throw errors.MissingResourceError(`no stub at index ${index}`);
         }
 
-        stubs.splice(index, 1);
+        const stub = stubs.splice(index, 1)[0];
+
+        stubLinks[stub.id].forEach(responseId => {
+            if(responseLinks[responseId].length === 1) {
+                delete responseLinks[responseId];
+                delete responses[responseId];
+            } else {
+                responseLinks[responseId].splice(resposneLinks[responseId].indexOf(stub.id)); 
+            }
+        });
+
+        delete stubLinks[stub.id];
         reindex();
+    }
+
+    async function resetResponseAtIndex(index, responseIndex) {
+        if (typeof stubs[index] === 'undefined') {
+            throw errors.MissingResourceError(`no stub at index ${index}`);
+        }
+
+        stubs[index].resetNextIndex(responseIndex);
     }
 
     /**
@@ -204,6 +337,8 @@ function createStubsRepository () {
         const cloned = helpers.clone(stubs);
 
         cloned.forEach(stub => {
+            delete stub.id;
+
             if (!options.debug) {
                 delete stub.matches;
             }
@@ -262,6 +397,9 @@ function createStubsRepository () {
     }
 
     return {
+        responses: responses,
+        responseLinks: responseLinks,
+        stubLinks: stubLinks,
         count: () => stubs.length,
         first,
         add,
@@ -273,7 +411,9 @@ function createStubsRepository () {
         deleteSavedProxyResponses,
         addRequest,
         loadRequests,
-        deleteSavedRequests
+        deleteSavedRequests,
+        resetResponseAtIndex,
+        addResponses
     };
 }
 
@@ -382,10 +522,10 @@ function create () {
      * @param {Number} id - the imposter's id
      * @returns {Object} - the stub repository
      */
-    function stubsFor (id) {
+    function stubsFor (id, responses, responseLinks, stubLinks) {
         // In practice, the stubsFor call occurs before the imposter is actually added...
         if (!stubRepos[String(id)]) {
-            stubRepos[String(id)] = createStubsRepository();
+            stubRepos[String(id)] = createStubsRepository(responses, responseLinks, stubLinks);
         }
 
         return stubRepos[String(id)];

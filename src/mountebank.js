@@ -105,6 +105,9 @@ async function createApp (options) {
     app.post('/imposters/:id/stubs', validateImposterExists, imposterController.postStub);
     app.delete('/imposters/:id/stubs/:stubIndex', validateImposterExists, imposterController.deleteStub);
 
+    
+    app.post('/imposters/:id/stubs/:stubIndex/resetNextResponse/:nextResponse', validateImposterExists, imposterController.resetStubNextResponse);
+
     // Protocol implementation APIs
     app.post('/imposters/:id/_requests', validateImposterExists, imposterController.postRequest);
     app.post('/imposters/:id/_requests/:proxyResolutionKey', validateImposterExists, imposterController.postProxyResponse);
