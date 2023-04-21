@@ -33,7 +33,7 @@ function load (builtInProtocols, customProtocols, options, isAllowedConnection, 
     function inProcessCreate (createProtocol) {
         return async (creationRequest, logger, responseFn) => {
             const server = await createProtocol(creationRequest, logger, responseFn),
-                stubs = impostersRepository.stubsFor(server.port),
+                stubs = impostersRepository.stubsFor(server.port, creationRequest.responses, creationRequest.responseLinks, creationRequest.stubLinks),
                 resolver = responseResolver.create(stubs, server.proxy);
 
             return {
